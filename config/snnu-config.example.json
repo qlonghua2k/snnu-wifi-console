@@ -1,0 +1,55 @@
+{
+  "ssid": "SNNU",
+  "profileName": "",
+  "adapterName": "",
+  "intervalSeconds": 60,
+  "loginCooldownSeconds": 60,
+  "loginMaxCooldownSeconds": 600,
+  "logRotateMB": 5,
+  "logRotateKeep": 3,
+  "connectivityChecks": [
+    {
+      "url": "http://www.msftconnecttest.com/connecttest.txt",
+      "expectStatus": 200,
+      "expectBody": "Microsoft Connect Test"
+    },
+    {
+      "url": "http://connectivitycheck.gstatic.com/generate_204",
+      "expectStatus": 204
+    }
+  ],
+  "portals": [
+    {
+      "name": "snnu-8602",
+      "loginPage": "http://202.117.144.205:8602/snnuportal/login.jsp",
+      "loginPost": "",
+      "usernameField": "",
+      "passwordField": "",
+      "extraFields": {},
+      "successRegex": ""
+    },
+    {
+      "name": "snnu-8603",
+      "loginPage": "http://202.117.144.205:8603/snnuportal/login.jsp",
+      "loginPost": "",
+      "usernameField": "",
+      "passwordField": "",
+      "extraFields": {},
+      "successRegex": ""
+    }
+  ],
+  "portalOptions": {
+    "networkType": "campus",
+    "campusNet": true,
+    "isp": "",
+    "rememberPassword": false
+  },
+  "credentials": {
+    "username": "",
+    "password": ""
+  },
+  "logPath": "logs\\wifi-keepalive.log",
+  "statePath": "logs\\state.json",
+  "triggerPath": "logs\\trigger.once",
+  "pythonPath": ""
+}

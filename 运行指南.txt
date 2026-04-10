@@ -1,0 +1,74 @@
+﻿SNNU 项目运行指南
+
+一、环境准备
+1. Windows 11
+2. 已能手动连接 Wi-Fi：SNNU
+3. 已安装 Python，并确保命令行可用 `python` 或 `py`
+
+二、安装依赖（门户登录已迁移到 Python，必须安装）
+1. 打开 PowerShell，进入项目根目录
+2. 执行：
+   pip install -r .\requirements.txt
+
+三、设置账号密码
+方式一（明文保存）：
+1. 执行：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\set-credentials.ps1
+2. 按提示输入密码
+
+方式二（Web 控制台保存明文）：
+1. 启动 Web 控制台（见下节）
+2. 在“凭据”里填写密码并保存
+
+四、启动 Web 控制台
+方式一（推荐，双击）：
+1. 直接双击根目录下的 run.bat
+2. 关闭 Web 控制台：双击根目录下的 stop.bat
+
+方式二（命令行）：
+1. 执行：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-web.ps1
+2. 浏览器打开：
+   http://127.0.0.1:8608
+3. 关闭 Web 控制台：
+   .\stop.bat
+
+五、测试运行（单次）
+1. 执行：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\wifi-keepalive.ps1 -Once
+2. 查看日志：
+   .\logs\wifi-keepalive.log
+
+六、Windows 服务方式（唯一支持的自启方式）
+1. 先安装“管理员助手”（只需一次，需管理员权限）：
+   右键 install-helper.bat → 以管理员身份运行
+2. 之后在 Web 控制台里直接打开“服务安装/服务运行/开机自启动”即可
+3. 如需卸载助手：
+   右键 uninstall-helper.bat → 以管理员身份运行
+
+注意：
+- 服务默认以 LocalSystem 运行，明文密码可直接使用。
+- 若服务下门户登录失败，请在 config\snnu-config.json 中设置 pythonPath 为 python.exe 的完整路径。
+- 确保 Wi-Fi 配置为“所有用户 + 自动连接”（见下条）。
+
+Wi-Fi 配置修复（管理员权限）：
+1. 执行：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fix-wifi-profile.ps1 -Profile SNNU
+2. 完成后重启系统或重启服务
+
+七、门户调试（当网页字段解析失败时使用）
+1. 访问：
+   http://127.0.0.1:8608/portal/debug
+2. 选择 portal（8602/8603）
+3. 如需覆盖字段：填写 loginPost / usernameField / passwordField / extraFields
+4. 点击“测试登录”验证
+
+八、常见问题
+1. 提示找不到 Wi-Fi 适配器：
+   请选择正确的无线网卡，或在“配置”里指定 AdapterName
+2. Wi-Fi 关闭或飞行模式开启：
+   脚本无法强制打开无线电，请手动开启
+3. Portal 访问失败：
+   请确认 VPN 已允许访问 202.117.144.205 或在门户调试页查看解析结果
+4. 日志过大：
+   已启用日志轮转，配置见 config\snnu-config.json

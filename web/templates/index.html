@@ -1,0 +1,239 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SNNU 网络控制台</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <div class="glow"></div>
+    <main class="page">
+      <header class="hero">
+        <div class="hero-text">
+          <h1>SNNU 网络控制台</h1>
+          <p class="subtitle">自动连接、门户认证与守护。稳定在线，一目了然。</p>
+          <div class="hero-meta">
+            <span>服务：<strong>
+              {% if not service_info.installed %}未安装{% elif service_info.running %}运行中{% else %}已停止{% endif %}
+            </strong></span>
+            <span>自启动：<strong>
+              {% if not service_info.installed %}未安装{% elif service_info.autostart %}开启{% else %}关闭{% endif %}
+            </strong></span>
+            {% if last_action %}
+              <span>最近操作：<strong>{{ last_action.label }}{% if last_action.ok %}成功{% else %}失败{% endif %}</strong></span>
+            {% endif %}
+          </div>
+          {% if last_action %}
+            <div class="banner {% if last_action.ok %}ok{% else %}fail{% endif %}">
+              <span>{{ last_action.label }}</span>
+              <span>{% if last_action.ok %}成功{% else %}失败{% endif %}</span>
+            </div>
+            {% if last_action.message %}
+              <pre class="action-output">{{ last_action.message }}</pre>
+            {% endif %}
+          {% endif %}
+        </div>
+        <div class="hero-actions">
+          <a class="btn outline" href="/service">服务管理</a>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="card-header">
+          <h2>控制开关</h2>
+          <p>请用开关操作，不再使用按钮。</p>
+        </div>
+        <div class="control-list">
+          <form class="control-item" method="post" action="{% if service_info.installed %}/service/uninstall{% else %}/service/install{% endif %}">
+            <div>
+              <strong>服务安装</strong>
+              <span>安装或卸载 Windows 服务</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" {% if service_info.installed %}checked{% endif %} onchange="this.form.submit()" />
+              <span class="slider"></span>
+            </label>
+          </form>
+          <form class="control-item{% if not service_info.installed %} disabled{% endif %}" method="post" action="{% if service_info.running %}/service/stop{% else %}/service/start{% endif %}">
+            <div>
+              <strong>服务运行</strong>
+              <span>启动或停止守护服务</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" {% if service_info.running %}checked{% endif %} {% if not service_info.installed %}disabled{% endif %} onchange="this.form.submit()" />
+              <span class="slider"></span>
+            </label>
+          </form>
+          <form class="control-item{% if not service_info.installed %} disabled{% endif %}" method="post" action="/service/autostart">
+            <input type="hidden" name="enable" value="{% if service_info.autostart %}0{% else %}1{% endif %}" />
+            <div>
+              <strong>开机自启动</strong>
+              <span>服务启动类型：自动/手动</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" {% if service_info.autostart %}checked{% endif %} {% if not service_info.installed %}disabled{% endif %} onchange="this.form.submit()" />
+              <span class="slider"></span>
+            </label>
+          </form>
+          <form class="control-item" method="post" action="/run-once">
+            <div>
+              <strong>立即运行一次</strong>
+              <span>不等待周期，立即执行</span>
+            </div>
+            <label class="switch momentary">
+              <input type="checkbox" onchange="this.form.submit()" />
+              <span class="slider"></span>
+            </label>
+          </form>
+          <form class="control-item" method="post" action="/status/check">
+            <div>
+              <strong>连接测试</strong>
+              <span>立即检测网络连通性</span>
+            </div>
+            <label class="switch momentary">
+              <input type="checkbox" onchange="this.form.submit()" />
+              <span class="slider"></span>
+            </label>
+          </form>
+          <a class="control-item link" href="/portal/debug">
+            <div>
+              <strong>门户调试</strong>
+              <span>查看表单解析与测试登录</span>
+            </div>
+            <span class="link-arrow">进入</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h2>实时状态</h2>
+          <p>每 5 秒自动刷新。</p>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <span>SSID</span>
+            <strong id="status-ssid">{{ status_data.get('ssid','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>连接状态</span>
+            <strong id="status-wlan">{{ status_data.get('wlanState','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>适配器</span>
+            <strong id="status-adapter">{{ status_data.get('adapter','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>适配器状态</span>
+            <strong id="status-adapter-status">{{ status_data.get('adapterStatus','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>IP</span>
+            <strong id="status-ip">{{ status_data.get('ip','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>网关</span>
+            <strong id="status-gw">{{ status_data.get('gateway','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>连通性</span>
+            <strong>
+              <span class="badge {% if status_data.get('connectivityOk') %}ok{% else %}fail{% endif %}" id="status-net">
+                {{ 'ONLINE' if status_data.get('connectivityOk') else 'OFFLINE' }}
+              </span>
+            </strong>
+          </div>
+          <div class="stat">
+            <span>最后状态</span>
+            <strong id="status-last">{{ status_data.get('lastState','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>最后上线</span>
+            <strong id="status-online">{{ status_data.get('lastOnline','') }}</strong>
+          </div>
+          <div class="stat">
+            <span>最后登录</span>
+            <strong id="status-login">{{ status_data.get('lastLoginSuccess','') }}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="card">
+          <div class="card-header">
+            <h2>配置</h2>
+            <p>锁定无线网卡并调整守护节奏。</p>
+          </div>
+          <form method="post" action="/config" class="form-grid">
+            <label>
+              SSID
+              <input name="ssid" value="{{ config.get('ssid','SNNU') }}" />
+            </label>
+            <label>
+              ProfileName
+              <input name="profileName" value="{{ config.get('profileName','') }}" />
+            </label>
+            <label>
+              AdapterName
+              <select name="adapterName">
+                <option value="">自动选择</option>
+                {% for a in adapters %}
+                  {% if a.IsWireless %}
+                    <option value="{{ a.Name }}" {% if config.get('adapterName','') == a.Name %}selected{% endif %}>{{ a.Name }} ({{ a.Status }})</option>
+                  {% endif %}
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              间隔（秒）
+              <input name="intervalSeconds" type="number" min="10" value="{{ config.get('intervalSeconds',60) }}" />
+            </label>
+            <label>
+              网络类型
+              <select name="networkType">
+                <option value="campus" {% if network_type == 'campus' %}selected{% endif %}>校园网</option>
+                <option value="unicom" {% if network_type == 'unicom' %}selected{% endif %}>联通</option>
+                <option value="mobile" {% if network_type == 'mobile' %}selected{% endif %}>移动</option>
+              </select>
+            </label>
+            <label>
+              用户名
+              <input name="username" value="{{ (config.get('credentials') or {}).get('username','') }}" />
+            </label>
+            <div class="full">
+              <button type="submit" class="btn primary">保存配置</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>凭据</h2>
+            <p>明文保存到本地配置文件。</p>
+          </div>
+          <form method="post" action="/credentials" class="form-grid">
+            <label>
+              密码
+              <input name="password" type="password" placeholder="不会回显" />
+            </label>
+            <div class="full">
+              <button type="submit" class="btn primary">保存密码</button>
+            </div>
+          </form>
+          <p class="hint">密码将以明文保存在 config\snnu-config.json 中。</p>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h2>日志（最后 200 行）</h2>
+          <p>快速定位断线原因与认证失败信息。</p>
+        </div>
+        <pre class="log" id="log-tail">{{ log_tail }}</pre>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

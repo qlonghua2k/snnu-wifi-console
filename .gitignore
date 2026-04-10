@@ -1,0 +1,21 @@
+# Local secrets
+config/snnu-config.json
+config/admin-token.txt
+
+# Runtime output
+logs/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

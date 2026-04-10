@@ -4,6 +4,8 @@
 
 推荐 GitHub 仓库名：`snnu-wifi-console`
 
+架构：Python 保活核心 + PowerShell 安装脚本 + Flask 控制台。
+
 ## Screenshots
 
 ![控制台首页](docs/assets/screenshot-dashboard.png)
@@ -85,12 +87,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fix-wifi-profile.p
 config/
   snnu-config.example.json   # 可公开提交的配置模板
 scripts/
-  wifi-keepalive.ps1         # Wi-Fi 保活主循环
+  wifi-keepalive.ps1         # 兼容入口，转调 Python 保活核心
   set-credentials.ps1        # 写入本地账号密码
   install-service.ps1        # 安装 Windows 服务
   admin_helper.py            # 管理员 helper 服务
 web/
   app.py                     # Flask 后端
+  keepalive.py               # Python Wi-Fi 保活核心
   portal.py                  # Portal 表单解析和登录逻辑
   templates/                 # Web UI 页面
   static/                    # 样式、脚本和背景图

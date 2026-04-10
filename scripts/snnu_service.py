@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import time
+import json
 from pathlib import Path
 
 import win32event
@@ -16,9 +16,20 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def powershell_path() -> str:
-    windir = os.environ.get("WINDIR", r"C:\Windows")
-    return str(Path(windir) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+def resolve_python(root: Path) -> str:
+    cfg_path = root / "config" / "snnu-config.json"
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+            py = cfg.get("pythonPath")
+            if py and Path(py).exists():
+                return str(Path(py))
+        except Exception:
+            pass
+    sibling = Path(sys.executable).with_name("python.exe")
+    if sibling.exists():
+        return str(sibling)
+    return "python"
 
 
 class SNNUService(win32serviceutil.ServiceFramework):
@@ -54,16 +65,12 @@ class SNNUService(win32serviceutil.ServiceFramework):
         if self.proc and self.proc.poll() is None:
             return
         root = repo_root()
-        script = root / "scripts" / "wifi-keepalive.ps1"
+        script = root / "web" / "keepalive.py"
         cfg = root / "config" / "snnu-config.json"
         cmd = [
-            powershell_path(),
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
+            resolve_python(root),
             str(script),
-            "-ConfigPath",
+            "--config",
             str(cfg),
         ]
         self.proc = subprocess.Popen(

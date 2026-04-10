@@ -11,6 +11,7 @@ from typing import Any
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 import requests
 
+from keepalive import KeepaliveManager
 from portal import attempt_portal_login, debug_info
 
 APP_PORT = int(os.environ.get("SNNU_WEB_PORT", "8608"))
@@ -22,7 +23,6 @@ NETWORK_TYPES = {"campus", "unicom", "mobile"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "config" / "snnu-config.json"
 ACTION_PATH = REPO_ROOT / "logs" / "last_action.json"
-SCRIPT_KEEPALIVE = REPO_ROOT / "scripts" / "wifi-keepalive.ps1"
 SCRIPT_SERVICE_INSTALL = REPO_ROOT / "scripts" / "install-service.ps1"
 SCRIPT_SERVICE_UNINSTALL = REPO_ROOT / "scripts" / "uninstall-service.ps1"
 TOKEN_PATH = REPO_ROOT / "config" / "admin-token.txt"
@@ -111,8 +111,9 @@ def run_powershell_file(path: Path, args: list[str] | None = None) -> subprocess
 
 
 def run_once() -> str:
-    result = run_powershell_file(SCRIPT_KEEPALIVE, ["-Once"])
-    return normalize_output(result)
+    manager = KeepaliveManager(CONFIG_PATH)
+    manager.run_once()
+    return "Python keepalive cycle completed."
 
 
 def service_status_raw() -> str:
@@ -369,14 +370,10 @@ def compact_status_timestamps(status_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_status_data() -> dict[str, Any]:
-    result = run_powershell_file(SCRIPT_KEEPALIVE, ["-Status"])
-    raw = (result.stdout or "").strip()
-    if not raw:
-        return {"error": (result.stderr or "status unavailable").strip()}
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"error": "invalid status output", "raw": raw}
+        return KeepaliveManager(CONFIG_PATH).status()
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def get_portal_by_name(cfg: dict[str, Any], name: str) -> dict[str, Any] | None:

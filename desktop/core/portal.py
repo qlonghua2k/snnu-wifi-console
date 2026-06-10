@@ -19,6 +19,7 @@ ISP_RE = {
 }
 NETWORK_TYPES = {"campus", "unicom", "mobile"}
 ALREADY_ONLINE_RE = re.compile(r"logoff|断开连接|已登录|当前登录账号|当前账号|在线", re.I)
+LOGIN_FAILURE_RE = re.compile(r"密码错误|认证失败|登录失败|账号不存在|invalid|failed|error", re.I)
 
 
 @dataclass
@@ -293,7 +294,23 @@ def attempt_portal_login(
             "password_field": parsed.password_field,
         }
 
-    return True, "login post sent", {
+    if ALREADY_ONLINE_RE.search(post_resp.text or ""):
+        return True, "online marker detected after post", {
+            "action_url": action_url,
+            "inputs": parsed.inputs,
+            "username_field": parsed.username_field,
+            "password_field": parsed.password_field,
+        }
+
+    if LOGIN_FAILURE_RE.search(post_resp.text or ""):
+        return False, "failure marker detected after post", {
+            "action_url": action_url,
+            "inputs": parsed.inputs,
+            "username_field": parsed.username_field,
+            "password_field": parsed.password_field,
+        }
+
+    return False, "login post sent but success not detected", {
         "action_url": action_url,
         "inputs": parsed.inputs,
         "username_field": parsed.username_field,

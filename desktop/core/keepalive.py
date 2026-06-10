@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import locale
 import os
 import re
 import subprocess
@@ -10,19 +11,75 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
-import requests
-
-from portal import attempt_portal_login, load_config
+try:
+    from .auth_client import (
+        LOGIN_FAILED as AUTH_LOGIN_FAILED,
+        MISSING_CREDENTIALS as AUTH_MISSING_CREDENTIALS,
+        NEED_LOGIN as AUTH_NEED_LOGIN,
+        NO_IP as AUTH_NO_IP,
+        NOT_SNNU_WIFI as AUTH_NOT_SNNU_WIFI,
+        ONLINE as AUTH_ONLINE,
+        PORTAL_UNREACHABLE as AUTH_PORTAL_UNREACHABLE,
+        WRONG_PASSWORD as AUTH_WRONG_PASSWORD,
+        AuthInput,
+        auth_templates_from_config,
+        check_connectivity,
+        ensure_online,
+    )
+    from .portal import load_config
+except ImportError:
+    from auth_client import (  # type: ignore
+        LOGIN_FAILED as AUTH_LOGIN_FAILED,
+        MISSING_CREDENTIALS as AUTH_MISSING_CREDENTIALS,
+        NEED_LOGIN as AUTH_NEED_LOGIN,
+        NO_IP as AUTH_NO_IP,
+        NOT_SNNU_WIFI as AUTH_NOT_SNNU_WIFI,
+        ONLINE as AUTH_ONLINE,
+        PORTAL_UNREACHABLE as AUTH_PORTAL_UNREACHABLE,
+        WRONG_PASSWORD as AUTH_WRONG_PASSWORD,
+        AuthInput,
+        auth_templates_from_config,
+        check_connectivity,
+        ensure_online,
+    )
+    from portal import load_config
 
 
 CONNECTED_RE = re.compile(r"connected|已连接", re.I)
+DISCONNECTED_RE = re.compile(r"disconnected|断开连接|未连接", re.I)
 WIFI_DESC_RE = re.compile(r"Wireless|Wi-Fi|WLAN", re.I)
+MOJIBAKE_RE = re.compile(r"[锟�]|[鎴鏂鐢绾缃杩][\u3000-\u9fff]")
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    override = os.environ.get("SNNU_REPO_ROOT")
+    if override:
+        return Path(override)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def bundle_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", repo_root()))
+    return repo_root()
+
+
+def ensure_config_file(path: Path) -> None:
+    if path.exists():
+        return
+    template_candidates = [
+        bundle_root() / "config" / "snnu-config.example.json",
+        repo_root() / "config" / "snnu-config.example.json",
+    ]
+    for template in template_candidates:
+        if template.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+            return
+    raise FileNotFoundError(f"Config file not found and template is missing: {path}")
 
 
 def powershell_path() -> str:
@@ -39,16 +96,52 @@ def resolve_path(root: Path, value: str, default_rel: str) -> Path:
     return root / path
 
 
+def output_encodings() -> list[str]:
+    encodings = ["utf-8-sig", "utf-8"]
+    preferred = locale.getpreferredencoding(False)
+    if preferred:
+        encodings.append(preferred)
+    if os.name == "nt":
+        encodings.extend(["mbcs", "oem"])
+    encodings.append("gb18030")
+    return list(dict.fromkeys(encodings))
+
+
+def decode_output(data: bytes) -> str:
+    if not data:
+        return ""
+
+    candidates: list[tuple[int, str]] = []
+    for encoding in output_encodings():
+        try:
+            text = data.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+        penalty = text.count("\ufffd") * 100
+        penalty += len(MOJIBAKE_RE.findall(text)) * 20
+        candidates.append((penalty, text))
+
+    if candidates:
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
+    return data.decode(locale.getpreferredencoding(False) or "utf-8", errors="replace")
+
+
 def run_command(cmd: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str]:
     kwargs: dict[str, Any] = {
         "capture_output": True,
-        "text": True,
-        "errors": "replace",
         "timeout": timeout,
     }
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    return subprocess.run(cmd, **kwargs)
+    result = subprocess.run(cmd, **kwargs)
+    return subprocess.CompletedProcess(
+        result.args,
+        result.returncode,
+        decode_output(result.stdout or b""),
+        decode_output(result.stderr or b""),
+    )
 
 
 def run_powershell(script: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -66,17 +159,6 @@ def now_iso() -> str:
     return datetime.now().astimezone().isoformat()
 
 
-def is_admin() -> bool:
-    if os.name != "nt":
-        return os.geteuid() == 0
-    try:
-        import ctypes
-
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
-
-
 def process_exists(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -90,10 +172,28 @@ def process_exists(pid: int) -> bool:
         return False
 
 
+def keepalive_process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        return process_exists(pid)
+    script = (
+        f"$p = Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\" -ErrorAction SilentlyContinue; "
+        "if ($p) { $p.CommandLine }"
+    )
+    try:
+        result = run_powershell(script, timeout=10)
+    except Exception:
+        return False
+    command_line = result.stdout or ""
+    return "--keepalive" in command_line or "keepalive.py" in command_line
+
+
 class KeepaliveManager:
     def __init__(self, config_path: Path | str | None = None):
         self.root = repo_root()
         self.config_path = self.resolve_config_path(config_path)
+        ensure_config_file(self.config_path)
         self.config = self.ensure_config_defaults(load_config(self.config_path))
         self.log_path = resolve_path(self.root, self.config.get("logPath", ""), "logs/wifi-keepalive.log")
         self.state_path = resolve_path(self.root, self.config.get("statePath", ""), "logs/state.json")
@@ -118,6 +218,7 @@ class KeepaliveManager:
         config.setdefault("statePath", "logs\\state.json")
         config.setdefault("triggerPath", "logs\\trigger.once")
         config.setdefault("connectivityChecks", [])
+        config.setdefault("connectivityTimeoutSeconds", 4)
         config.setdefault("credentials", {})
         config.setdefault("portalOptions", {})
         return config
@@ -186,24 +287,24 @@ class KeepaliveManager:
         state: dict[str, Any],
         new_state: str,
         error_message: str = "",
-        adapter: str = "",
-        ssid: str = "",
-        ip: str = "",
-        gateway: str = "",
-        connectivity_ok: bool = False,
+        adapter: str | None = None,
+        ssid: str | None = None,
+        ip: str | None = None,
+        gateway: str | None = None,
+        connectivity_ok: bool | None = None,
     ) -> None:
         state["lastState"] = new_state
-        if error_message:
-            state["lastError"] = error_message
-        if adapter:
+        state["lastError"] = error_message
+        if adapter is not None:
             state["lastAdapter"] = adapter
-        if ssid:
+        if ssid is not None:
             state["lastSsid"] = ssid
-        if ip:
+        if ip is not None:
             state["lastIp"] = ip
-        if gateway:
+        if gateway is not None:
             state["lastGateway"] = gateway
-        state["lastConnectivityOk"] = connectivity_ok
+        if connectivity_ok is not None:
+            state["lastConnectivityOk"] = connectivity_ok
 
     def adapter_list(self) -> list[dict[str, Any]]:
         script = (
@@ -247,23 +348,16 @@ class KeepaliveManager:
                 return adapter
         return None
 
-    def ensure_adapter_enabled(self, adapter: dict[str, Any]) -> bool:
-        if adapter.get("Status") != "Disabled":
-            return True
-        name = str(adapter.get("Name", ""))
-        self.log(f"Adapter {name} is disabled. Enabling...", "WARN")
-        escaped = name.replace("'", "''")
-        result = run_powershell(f"Enable-NetAdapter -Name '{escaped}' -Confirm:$false -ErrorAction Stop", timeout=20)
-        if result.returncode == 0:
-            time.sleep(3)
-            return True
-        self.log("Failed to enable adapter. Admin permission may be required.", "ERROR")
-        return False
-
-    def ensure_autoconfig(self, interface_name: str) -> None:
-        if not interface_name:
-            return
-        run_command(["netsh", "wlan", "set", "autoconfig", "enabled=yes", f"interface={interface_name}"], timeout=15)
+    @staticmethod
+    def is_connected_wlan(wlan: dict[str, Any] | None) -> bool:
+        if not wlan:
+            return False
+        state = str(wlan.get("State", ""))
+        if state and CONNECTED_RE.search(state):
+            return bool(str(wlan.get("Ssid", "")).strip())
+        if state and DISCONNECTED_RE.search(state):
+            return False
+        return bool(str(wlan.get("Ssid", "")).strip())
 
     def wlan_state(self, interface_name: str = "") -> dict[str, Any] | None:
         try:
@@ -273,23 +367,48 @@ class KeepaliveManager:
         output = result.stdout or ""
         if not output.strip():
             return None
-        state = ""
-        ssid = ""
-        profile = ""
-        radio_off = False
+
+        interfaces: list[dict[str, Any]] = []
+        current: dict[str, Any] = {"Name": "", "State": "", "Ssid": "", "Profile": "", "RadioSoftwareOff": False}
         for line in output.splitlines():
-            m = re.match(r"^\s*(State|状态)\s*:\s*(.+)$", line)
+            m = re.match(r"^\s*(Name|名称|接口名称)\s*:\s*(.+)$", line, re.I)
             if m:
-                state = m.group(2).strip()
+                if any(current.values()):
+                    interfaces.append(current)
+                    current = {"Name": "", "State": "", "Ssid": "", "Profile": "", "RadioSoftwareOff": False}
+                current["Name"] = m.group(2).strip()
+                continue
+
+            m = re.match(r"^\s*(State|状态)\s*:\s*(.+)$", line, re.I)
+            if m:
+                current["State"] = m.group(2).strip()
+                continue
+
             m = re.match(r"^\s*SSID\s*:\s*(.+)$", line)
             if m:
-                ssid = m.group(1).strip()
-            m = re.match(r"^\s*(Profile|配置文件)\s*:\s*(.+)$", line)
+                current["Ssid"] = m.group(1).strip()
+                continue
+
+            m = re.match(r"^\s*(Profile|配置文件)\s*:\s*(.+)$", line, re.I)
             if m:
-                profile = m.group(2).strip()
+                current["Profile"] = m.group(2).strip()
+                continue
+
             if re.search(r"Software\s+Off|软件\s*关闭|无线\s*电源\s*已关闭", line, re.I):
-                radio_off = True
-        return {"State": state, "Ssid": ssid, "Profile": profile, "RadioSoftwareOff": radio_off}
+                current["RadioSoftwareOff"] = True
+
+        if any(current.values()):
+            interfaces.append(current)
+        if not interfaces:
+            return None
+        if interface_name:
+            for item in interfaces:
+                if item.get("Name") == interface_name:
+                    return item
+        for item in interfaces:
+            if self.is_connected_wlan(item):
+                return item
+        return interfaces[0]
 
     def wlan_profiles(self) -> list[str]:
         try:
@@ -298,41 +417,13 @@ class KeepaliveManager:
             return []
         profiles = []
         for line in (result.stdout or "").splitlines():
-            m = re.search(r"(All User Profile|所有用户配置文件)\s*:\s*(.+)$", line)
+            m = re.search(r"(All User Profile|所有用户配置文件|用户配置文件)\s*:\s*(.+)$", line, re.I)
             if m:
                 profiles.append(m.group(2).strip())
         return profiles
 
     def all_user_profile(self, profile: str) -> bool:
         return bool(profile) and profile in self.wlan_profiles()
-
-    def connect_to_ssid(self, ssid: str, profile_name: str = "", interface_name: str = "") -> bool:
-        if not ssid:
-            return False
-        name_to_use = profile_name or ssid
-        if name_to_use not in self.wlan_profiles():
-            self.log(f"Wi-Fi profile not found: {name_to_use}. Connect once manually to create it.", "WARN")
-            return False
-        self.log(f"Connecting to SSID {ssid} (profile {name_to_use})...", "INFO")
-        cmd = ["netsh", "wlan", "connect", f"name={name_to_use}", f"ssid={ssid}"]
-        if interface_name:
-            cmd.append(f"interface={interface_name}")
-        try:
-            result = run_command(cmd, timeout=20)
-            time.sleep(5)
-            return result.returncode == 0
-        except Exception as exc:
-            self.log(f"Failed to connect to {ssid}. {exc}", "ERROR")
-            return False
-
-    def disconnect_wifi(self, interface_name: str = "") -> None:
-        cmd = ["netsh", "wlan", "disconnect"]
-        if interface_name:
-            cmd.append(f"interface={interface_name}")
-        try:
-            run_command(cmd, timeout=15)
-        except Exception:
-            return
 
     def ip_status(self, interface_alias: str) -> dict[str, str]:
         if not interface_alias:
@@ -354,78 +445,35 @@ class KeepaliveManager:
         return {"IP": str(data.get("IP") or ""), "Gateway": str(data.get("Gateway") or "")}
 
     def test_connectivity(self) -> bool:
-        for check in self.config.get("connectivityChecks", []):
-            url = check.get("url")
-            if not url:
-                continue
-            try:
-                resp = requests.get(url, timeout=8, allow_redirects=False)
-            except Exception:
-                continue
-            expected_status = check.get("expectStatus")
-            if expected_status and resp.status_code != expected_status:
-                continue
-            expected_body = check.get("expectBody")
-            if expected_body and expected_body not in resp.text:
-                continue
-            if urlparse(resp.url).hostname == "202.117.144.205":
-                continue
-            return True
-        return False
-
-    def portal_login(self) -> bool:
-        portals = self.config.get("portals", [])
-        if not portals:
-            self.log("Portal login: no portal configured.", "ERROR")
-            return False
-        creds = self.config.get("credentials") or {}
-        username = creds.get("username", "")
-        password = creds.get("password", "")
-        if not username or not password:
-            self.log("Portal login: missing credentials.", "ERROR")
-            return False
-        for portal in portals:
-            name = portal.get("name")
-            self.log(f"Portal login attempt: {name}")
-            debug_path = self.root / "logs" / f"portal-{name or 'portal'}-last.html"
-            ok, msg, info = attempt_portal_login(
-                portal=portal,
-                username=username,
-                password=password,
-                portal_options=self.config.get("portalOptions", {}),
-                timeout=10,
-                debug=True,
-                debug_path=debug_path,
-            )
-            result = {
-                "ok": ok,
-                "message": msg,
-                "portal": name,
-                "info": {
-                    "action_url": info.get("action_url"),
-                    "username_field": info.get("username_field"),
-                    "password_field": info.get("password_field"),
-                    "inputs": info.get("inputs", []),
-                },
-            }
-            self.log(f"Portal login output: {json.dumps(result, ensure_ascii=False)}", "INFO" if ok else "WARN")
-            if ok:
-                self.log(f"Portal login success: {name} ({msg})")
-                return True
-            self.log(f"Portal login failed: {name} ({msg})", "WARN")
-        self.log("Portal login failed on all portals.", "ERROR")
-        return False
+        timeout = float(self.config.get("connectivityTimeoutSeconds", 4) or 4)
+        return check_connectivity(self.config.get("connectivityChecks", []), timeout)
 
     def status(self) -> dict[str, Any]:
         adapter = self.wifi_adapter()
         wlan = self.wlan_state(adapter.get("Name", "")) if adapter else None
         ip = self.ip_status(adapter.get("Name", "")) if adapter else {"IP": "", "Gateway": ""}
         try:
-            connectivity_ok = self.test_connectivity()
+            internet_ok = self.test_connectivity()
         except Exception:
-            connectivity_ok = False
+            internet_ok = False
         state = self.load_state()
         profile_name = self.config.get("profileName") or self.config.get("ssid", "")
+        target_ssid = str(self.config.get("ssid", "SNNU"))
+        connected_wlan = bool(wlan and self.is_connected_wlan(wlan))
+        connected_to_target = bool(connected_wlan and wlan and wlan.get("Ssid") == target_ssid)
+        connectivity_ok = bool(connected_to_target and internet_ok)
+        if connectivity_ok:
+            last_state = "ONLINE"
+            last_error = ""
+        elif connected_wlan and wlan and wlan.get("Ssid") != target_ssid:
+            last_state = "OTHER_SSID"
+            last_error = ""
+        elif not connected_to_target:
+            last_state = "DISCONNECTED"
+            last_error = ""
+        else:
+            last_state = state.get("lastState", "") or "CONNECTED_NO_NET"
+            last_error = state.get("lastError", "")
         return {
             "adapter": adapter.get("Name", "") if adapter else "",
             "adapterStatus": adapter.get("Status", "") if adapter else "",
@@ -434,8 +482,10 @@ class KeepaliveManager:
             "ip": ip.get("IP", ""),
             "gateway": ip.get("Gateway", ""),
             "connectivityOk": connectivity_ok,
-            "lastState": state.get("lastState", ""),
-            "lastError": state.get("lastError", ""),
+            "internetOk": internet_ok,
+            "connectedToTarget": connected_to_target,
+            "lastState": last_state,
+            "lastError": last_error,
             "lastLoginAttempt": state.get("lastLoginAttempt", ""),
             "lastLoginSuccess": state.get("lastLoginSuccess", ""),
             "lastOnline": state.get("lastOnline", ""),
@@ -449,173 +499,96 @@ class KeepaliveManager:
         config = self.config
         state = self.load_state()
         now = datetime.now().astimezone()
-        admin = is_admin()
-
-        try:
-            run_powershell(
-                "$svc = Get-Service -Name WlanSvc -ErrorAction SilentlyContinue; "
-                "if ($svc -and $svc.Status -ne 'Running') { Start-Service -Name WlanSvc -ErrorAction SilentlyContinue }",
-                timeout=15,
-            )
-        except Exception:
-            pass
 
         adapter = self.wifi_adapter()
         if not adapter:
-            self.update_state(state, "NO_ADAPTER", "Wi-Fi adapter not found.")
+            self.update_state(state, "NO_ADAPTER", "Wi-Fi adapter not found.", adapter="", ssid="", ip="", gateway="", connectivity_ok=False)
             self.save_state(state)
             self.log("Wi-Fi adapter not found.", "ERROR")
             return
 
         adapter_name = str(adapter.get("Name", ""))
-        if not self.ensure_adapter_enabled(adapter):
-            self.update_state(state, "NEEDS_ADMIN", "Adapter disabled. Admin required.", adapter=adapter_name)
-            self.save_state(state)
-            return
-        self.ensure_autoconfig(adapter_name)
-
         wlan = self.wlan_state(adapter_name)
-        if wlan and wlan.get("RadioSoftwareOff"):
-            self.log("Wi-Fi radio is off. Attempting to enable...", "WARN")
-            if admin:
-                escaped = adapter_name.replace("'", "''")
-                run_powershell(f"Enable-NetAdapter -Name '{escaped}' -Confirm:$false -ErrorAction SilentlyContinue", timeout=20)
-                run_command(["netsh", "interface", "set", "interface", f"name={adapter_name}", "admin=enabled"], timeout=15)
-                time.sleep(3)
-                wlan = self.wlan_state(adapter_name)
-            if wlan and wlan.get("RadioSoftwareOff"):
-                self.update_state(state, "RADIO_OFF", "Wi-Fi radio is off.", adapter=adapter_name)
-                self.save_state(state)
-                self.log("Wi-Fi radio is off. Please enable Wi-Fi manually.", "WARN")
-                return
-
-        is_connected = bool(wlan and CONNECTED_RE.search(str(wlan.get("State", ""))) and str(wlan.get("Ssid", "")).strip())
+        current_ssid = str((wlan or {}).get("Ssid", ""))
         target_ssid = str(config.get("ssid", "SNNU"))
-
-        if is_connected and wlan and wlan.get("Ssid") != target_ssid:
-            previous_state = state.get("lastState")
-            previous_ssid = state.get("lastSsid")
-            self.update_state(state, "OTHER_SSID", adapter=adapter_name, ssid=str(wlan.get("Ssid", "")))
-            self.save_state(state)
-            if previous_state != "OTHER_SSID" or previous_ssid != wlan.get("Ssid"):
-                self.log(f"Connected to other SSID ({wlan.get('Ssid')}). No action.")
-            return
-
-        if not is_connected:
-            self.update_state(state, "DISCONNECTED", adapter=adapter_name, ssid=str((wlan or {}).get("Ssid", "")))
-            self.connect_to_ssid(target_ssid, str(config.get("profileName", "")), adapter_name)
-            wlan = self.wlan_state(adapter_name)
-            is_connected = bool(wlan and CONNECTED_RE.search(str(wlan.get("State", ""))))
-
         ip = self.ip_status(adapter_name)
-        connectivity_ok = self.test_connectivity()
-        connected_to_target = bool(
-            wlan and CONNECTED_RE.search(str(wlan.get("State", ""))) and wlan.get("Ssid") == target_ssid
-        )
-
-        if connectivity_ok:
-            self.update_state(
-                state,
-                "ONLINE",
-                adapter=adapter_name,
-                ssid=str((wlan or {}).get("Ssid", "")),
-                ip=ip.get("IP", ""),
-                gateway=ip.get("Gateway", ""),
-                connectivity_ok=True,
-            )
-            state["lastOnline"] = now_iso()
-            state["currentCooldownSeconds"] = int(config.get("loginCooldownSeconds", 60))
-            state["nextLoginAfter"] = ""
-            self.save_state(state)
-            self.log("Connectivity OK.")
-            return
-
-        if connected_to_target:
-            self.update_state(
-                state,
-                "CONNECTED_NO_NET",
-                adapter=adapter_name,
-                ssid=str((wlan or {}).get("Ssid", "")),
-                ip=ip.get("IP", ""),
-                gateway=ip.get("Gateway", ""),
-            )
-            self.log(f"Connected to {target_ssid} but no internet. Will re-login.", "WARN")
-        else:
-            self.update_state(
-                state,
-                "DISCONNECTED",
-                adapter=adapter_name,
-                ssid=str((wlan or {}).get("Ssid", "")),
-                ip=ip.get("IP", ""),
-                gateway=ip.get("Gateway", ""),
-            )
-            self.save_state(state)
-            self.log("Not connected to target SSID. Skip portal login.")
-            return
-
         creds = config.get("credentials") or {}
-        if not creds.get("username") or not creds.get("password"):
-            self.update_state(state, "MISSING_CREDENTIALS", "Missing credentials in config.")
-            self.save_state(state)
-            self.log("Missing credentials in config. Run set-credentials.ps1.", "ERROR")
-            return
+        options = config.get("portalOptions") or {}
+        network_type = str(options.get("networkType") or options.get("isp") or "campus")
 
         next_login_after = state.get("nextLoginAfter")
         if next_login_after:
             try:
                 next_time = datetime.fromisoformat(str(next_login_after))
                 if now < next_time:
-                    self.update_state(state, "LOGIN_COOLDOWN", "Cooldown active.")
+                    self.update_state(state, "LOGIN_COOLDOWN", "Cooldown active.", connectivity_ok=False)
                     self.save_state(state)
                     self.log(f"Login cooldown active until {next_time.strftime('%H:%M:%S')}")
                     return
             except ValueError:
                 pass
 
-        self.log("Attempting portal login via Python...")
-        login_ok = self.portal_login()
+        auth = AuthInput(
+            target_ssid=target_ssid,
+            current_ssid=current_ssid,
+            ip=ip.get("IP", ""),
+            username=str(creds.get("username", "")),
+            password=str(creds.get("password", "")),
+            network_type=network_type,
+        )
+        templates = auth_templates_from_config(config)
+        timeout = float(config.get("connectivityTimeoutSeconds", 4) or 4)
+        result = ensure_online(auth, templates, config.get("connectivityChecks", []), timeout=timeout)
         state["lastLoginAttempt"] = now_iso()
-        if login_ok:
-            state["lastLoginSuccess"] = now_iso()
-            state["currentCooldownSeconds"] = int(config.get("loginCooldownSeconds", 60))
-        else:
-            current = int(state.get("currentCooldownSeconds") or config.get("loginCooldownSeconds", 60))
-            max_cooldown = int(config.get("loginMaxCooldownSeconds", 600))
-            state["currentCooldownSeconds"] = min(max(current * 2, 1), max_cooldown)
 
-        state["nextLoginAfter"] = (now + timedelta(seconds=int(state["currentCooldownSeconds"]))).isoformat()
+        state_name = {
+            AUTH_ONLINE: "ONLINE",
+            AUTH_NOT_SNNU_WIFI: "OTHER_SSID" if current_ssid else "DISCONNECTED",
+            AUTH_NO_IP: "CONNECTED_NO_NET",
+            AUTH_MISSING_CREDENTIALS: "MISSING_CREDENTIALS",
+            AUTH_NEED_LOGIN: "NEEDS_LOGIN",
+            AUTH_WRONG_PASSWORD: "WRONG_PASSWORD",
+            AUTH_LOGIN_FAILED: "LOGIN_FAILED",
+            AUTH_PORTAL_UNREACHABLE: "LOGIN_FAILED",
+        }.get(result.status, "UNKNOWN")
 
-        time.sleep(3)
-        connectivity_ok = self.test_connectivity()
-        if connectivity_ok:
+        if result.status == AUTH_ONLINE:
             self.update_state(
                 state,
-                "ONLINE",
+                state_name,
                 adapter=adapter_name,
-                ssid=str((wlan or {}).get("Ssid", "")),
+                ssid=current_ssid,
                 ip=ip.get("IP", ""),
                 gateway=ip.get("Gateway", ""),
                 connectivity_ok=True,
             )
             state["lastOnline"] = now_iso()
-            self.log("Connectivity restored after portal login.")
+            state["lastLoginSuccess"] = now_iso()
+            state["currentCooldownSeconds"] = int(config.get("loginCooldownSeconds", 60))
+            state["nextLoginAfter"] = ""
+            self.log(f"Auth OK. {result.message}")
         else:
-            if connected_to_target:
-                self.log("Still offline. Disconnecting and reconnecting Wi-Fi...", "WARN")
-                self.disconnect_wifi(adapter_name)
-                time.sleep(2)
-                self.connect_to_ssid(target_ssid, str(config.get("profileName", "")), adapter_name)
-            error = "Connectivity still failing." if login_ok else "Portal login failed."
             self.update_state(
                 state,
-                "LOGIN_FAILED",
-                error,
+                state_name,
+                result.message,
                 adapter=adapter_name,
-                ssid=str((wlan or {}).get("Ssid", "")),
+                ssid=current_ssid,
                 ip=ip.get("IP", ""),
                 gateway=ip.get("Gateway", ""),
+                connectivity_ok=False,
             )
-            self.log("Connectivity still failing. Will retry.", "WARN")
+            current = int(state.get("currentCooldownSeconds") or config.get("loginCooldownSeconds", 60))
+            max_cooldown = int(config.get("loginMaxCooldownSeconds", 600))
+            if result.status in {AUTH_LOGIN_FAILED, AUTH_PORTAL_UNREACHABLE, AUTH_NEED_LOGIN}:
+                state["currentCooldownSeconds"] = min(max(current * 2, 1), max_cooldown)
+                state["nextLoginAfter"] = (now + timedelta(seconds=int(state["currentCooldownSeconds"]))).isoformat()
+            elif result.status == AUTH_WRONG_PASSWORD:
+                state["currentCooldownSeconds"] = max_cooldown
+                state["nextLoginAfter"] = (now + timedelta(seconds=max_cooldown)).isoformat()
+            else:
+                state["nextLoginAfter"] = ""
+            self.log(f"Auth state: {result.status}. {result.message}", "WARN")
         self.save_state(state)
 
     def test_trigger(self) -> bool:
@@ -645,7 +618,7 @@ class KeepaliveManager:
                 old_pid = int(path.read_text(encoding="utf-8").strip() or "0")
             except ValueError:
                 old_pid = 0
-            if not process_exists(old_pid):
+            if not keepalive_process_exists(old_pid):
                 try:
                     path.unlink()
                 except Exception:

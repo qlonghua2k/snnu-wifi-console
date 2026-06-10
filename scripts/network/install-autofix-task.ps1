@@ -4,8 +4,8 @@
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$scriptPath = Join-Path $repoRoot "scripts\auto-fix.ps1"
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$scriptPath = Join-Path $repoRoot "scripts\network\auto-fix.ps1"
 if (!(Test-Path -Path $scriptPath)) { throw "Script not found: $scriptPath" }
 
 $taskCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""

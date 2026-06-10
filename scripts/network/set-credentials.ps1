@@ -10,7 +10,7 @@ function Resolve-RepoRoot {
   if (-not $scriptDir) { $scriptDir = Split-Path -Parent $PSCommandPath }
   if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
   if (-not $scriptDir) { return (Get-Location).Path }
-  return (Split-Path -Parent $scriptDir)
+  return (Split-Path -Parent (Split-Path -Parent $scriptDir))
 }
 
 function Resolve-ConfigPath {

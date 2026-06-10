@@ -13,7 +13,7 @@ function Resolve-RepoRoot {
   if (-not $scriptDir) { $scriptDir = Split-Path -Parent $PSCommandPath }
   if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
   if (-not $scriptDir) { return (Get-Location).Path }
-  return (Split-Path -Parent $scriptDir)
+  return (Split-Path -Parent (Split-Path -Parent $scriptDir))
 }
 
 function Resolve-ConfigPath {
@@ -27,6 +27,9 @@ function Resolve-ConfigPath {
 
 function Resolve-Python {
   param([string]$ConfigPath)
+  $repoRoot = Resolve-RepoRoot
+  $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
+  if (Test-Path -Path $venvPython) { return $venvPython }
   if (Test-Path -Path $ConfigPath) {
     try {
       $cfg = (Get-Content -Path $ConfigPath -Raw) | ConvertFrom-Json
@@ -42,7 +45,7 @@ function Resolve-Python {
 
 $repoRoot = Resolve-RepoRoot
 $resolvedConfig = Resolve-ConfigPath -Path $ConfigPath
-$keepalive = Join-Path $repoRoot "web\keepalive.py"
+$keepalive = Join-Path $repoRoot "desktop\core\keepalive.py"
 if (!(Test-Path -Path $keepalive)) { throw "Python keepalive script not found: $keepalive" }
 
 $py = Resolve-Python -ConfigPath $resolvedConfig

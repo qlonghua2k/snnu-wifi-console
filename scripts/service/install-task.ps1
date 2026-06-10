@@ -12,7 +12,7 @@ function Resolve-RepoRoot {
   if (-not $scriptDir) { $scriptDir = Split-Path -Parent $PSCommandPath }
   if (-not $scriptDir) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
   if (-not $scriptDir) { return (Get-Location).Path }
-  return (Split-Path -Parent $scriptDir)
+  return (Split-Path -Parent (Split-Path -Parent $scriptDir))
 }
 
 function Resolve-ConfigPath {
@@ -25,7 +25,7 @@ function Resolve-ConfigPath {
 }
 
 $repoRoot = Resolve-RepoRoot
-$scriptPath = Join-Path $repoRoot "scripts\wifi-keepalive.ps1"
+$scriptPath = Join-Path $repoRoot "scripts\network\wifi-keepalive.ps1"
 $resolvedConfigPath = Resolve-ConfigPath -Path $ConfigPath
 
 if (!(Test-Path -Path $scriptPath)) { throw "Script not found: $scriptPath" }

@@ -12,12 +12,23 @@ import win32serviceutil
 import servicemanager
 
 
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+def bundle_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent / "_internal"))
+    return Path(__file__).resolve().parents[2]
 
 
-def resolve_python(root: Path) -> str:
-    cfg_path = root / "config" / "snnu-config.json"
+def app_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    root = bundle_root()
+    if root.name == "_internal":
+        return root.parent
+    return root
+
+
+def resolve_python(config_root: Path) -> str:
+    cfg_path = config_root / "config" / "snnu-config.json"
     if cfg_path.exists():
         try:
             cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
@@ -64,18 +75,18 @@ class SNNUService(win32serviceutil.ServiceFramework):
     def _start_child(self):
         if self.proc and self.proc.poll() is None:
             return
-        root = repo_root()
-        script = root / "web" / "keepalive.py"
-        cfg = root / "config" / "snnu-config.json"
-        cmd = [
-            resolve_python(root),
-            str(script),
-            "--config",
-            str(cfg),
-        ]
+        bundle = bundle_root()
+        app = app_root()
+        cfg = app / "config" / "snnu-config.json"
+        exe = app / "SNNU WiFi Console.exe"
+        if exe.exists():
+            cmd = [str(exe), "--keepalive", "--config", str(cfg)]
+        else:
+            script = bundle / "desktop" / "core" / "keepalive.py"
+            cmd = [resolve_python(app), str(script), "--config", str(cfg)]
         self.proc = subprocess.Popen(
             cmd,
-            cwd=str(root),
+            cwd=str(app),
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
 

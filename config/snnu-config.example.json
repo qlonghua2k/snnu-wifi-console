@@ -3,8 +3,10 @@
   "profileName": "",
   "adapterName": "",
   "intervalSeconds": 60,
+  "autoKeepalive": false,
   "loginCooldownSeconds": 60,
   "loginMaxCooldownSeconds": 600,
+  "connectivityTimeoutSeconds": 4,
   "logRotateMB": 5,
   "logRotateKeep": 3,
   "connectivityChecks": [
@@ -16,6 +18,44 @@
     {
       "url": "http://connectivitycheck.gstatic.com/generate_204",
       "expectStatus": 204
+    }
+  ],
+  "authTemplates": [
+    {
+      "name": "snnu-8602",
+      "loginPage": "http://202.117.144.205:8602/snnuportal/login.jsp",
+      "loginUrl": "http://202.117.144.205:8602/snnuportal/login",
+      "method": "POST",
+      "form": {
+        "sourceurl": "null",
+        "account": "{username}",
+        "password": "{password}",
+        "yys": "{operator}",
+        "issave": ""
+      },
+      "operators": {
+        "campus": "",
+        "unicom": "unicom",
+        "mobile": "mobile"
+      }
+    },
+    {
+      "name": "snnu-8603",
+      "loginPage": "http://202.117.144.205:8603/snnuportal/login.jsp",
+      "loginUrl": "http://202.117.144.205:8603/snnuportal/login",
+      "method": "POST",
+      "form": {
+        "sourceurl": "null",
+        "account": "{username}",
+        "password": "{password}",
+        "yys": "{operator}",
+        "issave": ""
+      },
+      "operators": {
+        "campus": "",
+        "unicom": "unicom",
+        "mobile": "mobile"
+      }
     }
   ],
   "portals": [

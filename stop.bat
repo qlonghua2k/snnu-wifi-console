@@ -1,7 +1,0 @@
-@echo off
-setlocal
-cd /d %~dp0
-
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\\stop-web.ps1" >nul 2>nul
-
-exit /b 0

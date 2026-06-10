@@ -1,0 +1,179 @@
+SNNU Wi-Fi Console 运行指南
+
+适用范围
+1. 本项目是陕西师范大学（SNNU）校园网专用工具。
+2. 默认 Wi-Fi 名称为 SNNU。
+3. 默认 Portal 地址为 202.117.144.205:8602 和 202.117.144.205:8603。
+4. 支持线路：校园网、联通、移动。
+5. 不保证适用于其他学校、其他 SSID 或其他 Portal 系统。
+
+一、环境准备
+1. 系统：Windows 11。
+2. 网络：已经手动连接过一次 Wi-Fi：SNNU。
+3. Python：开发机需安装 Python，并确保命令行可用 python 或 py。
+4. 首次启动会自动创建项目内 .venv，后续运行优先使用 .venv，不依赖用户 Conda。
+5. 依赖：项目依赖 requests、beautifulsoup4、pywin32、PySide6。
+
+二、安装依赖
+1. 打开 PowerShell，进入项目根目录：
+   Set-Location D:\Projects\snnu-wifi-console
+
+2. 创建项目自带 .venv 并安装依赖：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\env\bootstrap-venv.ps1
+
+3. 该脚本会自动把 config\snnu-config.json 的 pythonPath 写入 .venv\Scripts\python.exe。
+4. 如果本机默认 Python 是 3.13，推荐先创建轻量 py312 Conda 种子环境：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\env\setup-py312-conda.ps1 -Bootstrap
+
+三、创建本地配置
+1. 如果 config\snnu-config.json 不存在，先复制模板：
+   Copy-Item .\config\snnu-config.example.json .\config\snnu-config.json
+
+2. config\snnu-config.json 是本地私有配置，里面会保存账号密码。
+3. 该文件已被 .gitignore 排除，不要上传到 GitHub。
+
+四、设置账号密码
+方式一：命令行设置
+1. 执行：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\network\set-credentials.ps1
+2. 按提示输入用户名和密码。
+3. 密码会明文保存到 config\snnu-config.json。
+
+方式二：桌面控制台设置
+1. 启动桌面控制台。
+2. 在“配置”区域填写用户名和新密码并保存。
+3. 密码同样会明文保存到 config\snnu-config.json。
+
+五、选择线路
+1. 打开桌面控制台。
+2. 在“配置”区域找到“线路”。
+3. 根据实际账号选择：
+   - 校园网
+   - 联通
+   - 移动
+4. 保存配置。
+
+说明：
+1. 该选项会写入 config\snnu-config.json 的 portalOptions.networkType。
+2. 桌面控制台、后台服务和单次运行都读取同一份配置。
+3. 当前项目仅支持上述三个选项。
+
+六、启动桌面控制台
+方式一：正式 EXE 启动
+1. 双击 artifacts\dist\SNNU WiFi Console\SNNU WiFi Console.exe。
+2. EXE 会要求管理员权限；如果当前不是管理员，会自动弹出 UAC 提权。
+3. 关闭窗口时会最小化到系统托盘；托盘菜单可退出。
+
+方式二：源码开发启动
+1. 执行：
+   .\scripts\app\dev-run.bat
+2. 首次启动会创建 .venv 并安装依赖。
+
+说明：
+1. 历史 Web 版已归档到 backup\web-legacy。
+2. 正式桌面版和 EXE 打包产物不再包含 Web 控制台。
+
+七、单次测试
+1. 执行：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\network\wifi-keepalive.ps1 -Once
+
+2. 查看状态：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\network\wifi-keepalive.ps1 -Status
+
+3. 查看日志：
+   .\logs\wifi-keepalive.log
+
+说明：
+1. 当前核心逻辑已经迁移到 Python。
+2. scripts\network\wifi-keepalive.ps1 只是兼容入口，会转调 desktop\core\keepalive.py。
+
+八、Windows 服务方式
+推荐长期使用 Windows 服务方式，让程序在后台守护运行。
+
+首次安装管理员助手：
+1. 右键 scripts\service\install-helper.bat。
+2. 选择“以管理员身份运行”。
+3. 只需安装一次。
+
+安装并启动主服务：
+1. 打开桌面控制台。
+2. 在“操作”区域点击：
+   - 服务安装
+   - 服务运行
+
+命令行安装主服务（管理员 PowerShell）：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\service\install-service.ps1 -Force -RunNow
+
+卸载服务（管理员 PowerShell）：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\service\uninstall-service.ps1
+
+卸载管理员助手：
+1. 右键 scripts\service\uninstall-helper.bat。
+2. 选择“以管理员身份运行”。
+
+九、重命名目录后的处理
+如果项目目录改过名字，需要重新安装服务，否则 Windows 服务可能仍指向旧路径。
+
+管理员 PowerShell 执行：
+   Set-Location D:\Projects\snnu-wifi-console
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\service\uninstall-service.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\service\install-service.ps1 -Force -RunNow
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\admin\uninstall-admin-helper.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\admin\install-admin-helper.ps1
+
+十、Wi-Fi 配置修复
+如果服务启动后无法连接 SNNU，可能是 Wi-Fi profile 只属于当前用户。
+
+管理员 PowerShell 执行：
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\network\fix-wifi-profile.ps1 -Profile SNNU
+
+完成后重启系统或重启服务。
+
+十一、常见问题
+1. 找不到 Wi-Fi 适配器：
+   在桌面控制台“连接配置”里指定正确的无线网卡。
+
+2. Wi-Fi 关闭或飞行模式开启：
+   请先手动打开 Wi-Fi。脚本无法稳定强制打开无线电开关。
+
+3. Portal 登录失败：
+   检查账号密码、网络类型和 logs\portal-*-last.html。
+
+4. 服务下登录失败，但手动运行成功：
+   先执行 scripts\env\bootstrap-venv.ps1，确认 config\snnu-config.json 里的 pythonPath 指向 .venv\Scripts\python.exe。
+
+5. 日志过大：
+   已启用日志轮转，配置项是 logRotateMB 和 logRotateKeep。
+
+6. GitHub 发布前检查：
+   确认不要提交 config\snnu-config.json、config\admin-token.txt 和 logs 目录。
+
+十二、当前项目结构
+1. Python 核心：
+   desktop\core\keepalive.py
+   desktop\core\portal.py
+
+2. 桌面控制台：
+   desktop\app.py
+   desktop\views\
+   desktop\controllers\
+   desktop\models\
+   desktop\services\
+
+3. PowerShell 安装和兼容入口：
+   scripts\env\bootstrap-venv.ps1
+   scripts\env\setup-py312-conda.ps1
+   scripts\app\start-desktop.ps1
+   scripts\app\dev-run.bat
+   scripts\build\build-exe.ps1
+   scripts\service\install-service.ps1
+   scripts\service\uninstall-service.ps1
+   scripts\network\fix-wifi-profile.ps1
+   scripts\network\wifi-keepalive.ps1
+
+4. Windows 服务：
+   scripts\service\snnu_service.py
+   scripts\admin\admin_helper.py
+
+5. 历史 Web 版归档：
+   backup\web-legacy\

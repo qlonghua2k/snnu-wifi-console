@@ -9,10 +9,18 @@ logs/
 __pycache__/
 *.py[cod]
 
+# Build output
+/build/
+/dist/
+artifacts/build/
+artifacts/dist/
+/*.spec
+!packaging/*.spec
+
 # Virtual environments
 .venv/
-venv/
-env/
+/venv/
+/env/
 
 # Editor and OS files
 .vscode/
